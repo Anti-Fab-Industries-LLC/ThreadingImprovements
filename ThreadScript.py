@@ -172,7 +172,6 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 	Pitch = ThreadDetails["Pitch"]
 	ToolZLength = ToolDetails["ZLength"]
 	Thread = list()
-# +(2*float(Pitch)) # Aircutting lead in
 	ThreadZDepth = ThreadDetails["ZDepth"]	
 	EndZPlane = float(ThreadDetails["DistanceFromZero"] - ThreadZDepth) # Absolute coordinate from the start plane of the hole
 	Count = math.ceil(ThreadZDepth/Pitch) # Over cuts. This means the thread needs to be bottom alligned so that the tool will not crash.
@@ -230,8 +229,12 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 	ArcRadius = ThreadDetails["MajorDiameter"] - (float(ToolDetails["Diameter"])/2)
 	ArcX = float(LocatingFeatures["X"]) + ArcRadius
 	ArcY = float(LocatingFeatures["Y"]) + ArcRadius
+	CenterX = float(LocatingFeatures["X"])
+	CenterY = float(LocatingFeatures["Y"])
+	CenterZ = StartZ-(Pitch/2)
 	for i in range(Count+3):
 		CurrentZ = StartZ-(i*Pitch)
+		CenterZ -= float(Pitch)
 		Line = AddLine(
 			GCodeContainer=Thread,
 			N=Line,
@@ -239,9 +242,12 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 			X=ArcX,
 			Y=ArcY,
 			Z=CurrentZ,
+			I=CenterX,
+			J=CenterY,
+			K=CenterZ,
 			F=Feed
 			)
-		
+
 	# Feed to origin x, y and bottomz
 	Line = AddLine(
 		GCodeContainer=Thread,
