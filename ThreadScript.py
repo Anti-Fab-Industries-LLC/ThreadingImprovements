@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/b//in/env python3
 from __future__ import annotations
 from collections.abc import Callable # https://docs.python.org/3/library/collections.abc.html
 import re # https://docs.python.org/3/howto/regex.html#regex-howto
@@ -77,6 +77,13 @@ class UserInput: # https://docs.python.org/3/reference/compound_stmts.html#class
 	Can also read thread details from a standardized file so that the user can specify thread types from selected geometry in freecad
 		That feature is needed for way dowwn the road when this script my be merged with exoisting freecad infrastructure
 '''
+
+# Converts to MM and rounds to 0.001 if Final true
+def ConvertToMM(Number,Final=False):
+	Output = float(Number) * 25.4
+	if Final:
+		Output = round(Output, 3)
+	return Output
 
 # Puts the correct alpha code in the correct format. Modified from Refactored_Dynapath_d20_post_patch_Oct_16.py
 def fmt_value(key, value:float):
@@ -168,6 +175,7 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 
 	StartZPlane = float(LocatingFeatures["Z"]) # Distance from part 0 Z plane to the start plane of the hole
 	Feed = LocatingFeatures["F"]
+	RapidFeed = 1000 # mm/min
 	Line = LocatingFeatures["N"]
 	Pitch = ThreadDetails["Pitch"]
 	ToolZLength = ToolDetails["ZLength"]
@@ -176,6 +184,20 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 	EndZPlane = float(ThreadDetails["DistanceFromZero"] - ThreadZDepth) # Absolute coordinate from the start plane of the hole
 	Count = math.ceil(ThreadZDepth/Pitch) # Over cuts. This means the thread needs to be bottom alligned so that the tool will not crash.
 	StartZ = EndZPlane + (Count * float(Pitch)) + (2 * float(Pitch)) # Aircutting lead in # Ensure that the user knows to always set the final G81 depth as the start of the hole 
+	ArcRadius = ConvertToMM(ThreadDetails["MajorDiameter"]) - ConvertToMM(float(ToolDetails["Diameter"])/2)
+		# Why? Good for testing tbh. Shows that the arcs will execute as desired without cutting
+			# ThreadDetails["MajorDiameter"] - (float(ToolDetails["Diameter"])/2)
+			# Literally will have no thread engagement
+			# OMF it's cause it's in imperial.....
+		# Need to actually have a good number here to cut the threads?
+			# Cutter Diameter = 0.182 in
+			# Minor Diameter = 0.202 in
+			# Major Diameter = 0.219949 in
+			# Cut material one side = (MajorDiameter - MinorDiameter)/2 = (0.219949 in - 0.202 in)/2 = 0.0089745 in
+			# Cutter tooth depth = (OverallDiameter - ShaftDiameter)/2 = (0.182 in - 0.104 in)/2 = 0.039 in
+		# Methodology
+			# Go with the theoretically ideal cut of 0.0089745 in
+			# Then increment up or down as needed in situe
 
 	# G22 and G23 are inposition detect G2 and G3. This is important for the quality of the thread
 	if ThreadDetails["Type"] == "Internal":
@@ -189,9 +211,9 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 
 	# Arc Type
 	if ThreadDetails["Direction"] == "CW":
-		GCode=22
+		ThreadGCode=22
 	elif ThreadDetails["Direction"] == "CCW":
-		GCode=23
+		ThreadGCode=23
 	else:
 		print("Bad Thread Direction specified")
 		sys.exit(1)
@@ -203,45 +225,61 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 	Then a rapid to safe Z height
 	'''
 	
-	# Thread.extend(
+	# Call settup so that it makes sure whenever the cutter will be engaging with the material it is at the right speed
 	Temp = Settup(
 		LocatingFeatures=LocatingFeatures,
 		SpindleStatus=SpindleStatus,
 		ToolDetails=ToolDetails
-		) # Appends the list returned by settup to Output)
+		) # Appends the list returned by settup to Output
 	Thread.extend(Temp[0])
 	Line = Temp[1].get("N")
 	SpindleStatus = Temp[2]
 
 	# Go to origin x, y, z
-	CurrentZ = StartZ
+	GCode = 0
+	EndpointX = float(LocatingFeatures["X"])
+	EndpointY = float(LocatingFeatures["Y"])
+	EndpointZ = StartZ
 	Line = AddLine(
 		GCodeContainer=Thread,
 		N=Line,
-		G=0,
-		X=float(LocatingFeatures["X"]),
-		Y=float(LocatingFeatures["Y"]),
-		Z=CurrentZ,
+		G=GCode,
+		X=EndpointX,
+		Y=EndpointY,
+		Z=EndpointZ,
+		F=Feed
+		)
+
+	# Feed to start position
+	GCode = 1
+	EndpointX = float(LocatingFeatures["X"]) + ArcRadius
+	EndpointY = float(LocatingFeatures["Y"]) + ArcRadius
+	EndpointZ = StartZ
+	Line = AddLine(
+		GCodeContainer=Thread,
+		N=Line,
+		G=GCode,
+		X=EndpointX,
+		Y=EndpointY,
+		Z=EndpointZ,
 		F=Feed
 		)
 
 	# All thread sections
-	ArcRadius = ThreadDetails["MajorDiameter"] - (float(ToolDetails["Diameter"])/2)
-	ArcX = float(LocatingFeatures["X"]) + ArcRadius
-	ArcY = float(LocatingFeatures["Y"]) + ArcRadius
+	GCode = ThreadGCode
 	CenterX = float(LocatingFeatures["X"])
 	CenterY = float(LocatingFeatures["Y"])
-	CenterZ = StartZ-(Pitch/2)
+	CenterZ = StartZ + (Pitch/2) # Locate the center period in the middle of the thread helix
 	for i in range(Count+3):
-		CurrentZ = StartZ-(i*Pitch)
+		EndpointZ -= float(Pitch)
 		CenterZ -= float(Pitch)
 		Line = AddLine(
 			GCodeContainer=Thread,
 			N=Line,
 			G=GCode,
-			X=ArcX,
-			Y=ArcY,
-			Z=CurrentZ,
+			X=EndpointX,
+			Y=EndpointY,
+			Z=EndpointZ,
 			I=CenterX,
 			J=CenterY,
 			K=CenterZ,
@@ -267,22 +305,27 @@ def GenerateThread (LocatingFeatures, ToolDetails, ThreadDetails, SpindleStatus)
 		)
 	SpindleStatus["AtSpeed"] = False
 
-	# feed up to orgin z
+	# Rapid up to orgin z
+	GCode=1
+	Feed=RapidFeed
 	Line = AddLine(
 		GCodeContainer=Thread,
 		N=Line,
-		G=1,
+		G=GCode,
 		Z=StartZ,
 		F=Feed
 		)
 
 	# Rapid up to safe Z
+	GCode = 1
+	Feed = RapidFeed
 	SafeZ = float(LocatingFeatures["R"]) # R is the plane the the canned cycle starts at. The user should define this value as the safe plane
 	Line = AddLine(
 		GCodeContainer=Thread,
 		N=Line,
-		G=0,
-		Z=StartZ
+		G=GCode,
+		Z=StartZ,
+		F=Feed
 		)
 
 	return Thread
@@ -362,12 +405,14 @@ if __name__ == "__main__": # Includes so that is file can be used as a library t
 			"DepthOfCut2":(float(0.65), float(0.35)), # %
 			"DepthOfCut3":(float(0.50), float(0.30), float(0.20)), # %
 			"DepthOfCut4":(float(0.40), float(0.27), float(0.20), float(0.13)), # %
-			"ToolNumber": int(6) # The tool holder catelouge number. Sycronnized with tool table in head unit.
+			"ToolNumber": int(4) # The tool holder catelouge number. Sycronnized with tool table in head unit.
 			}
 
 		# For dubugging
-		for times in range(len(Extract(ToolDetails, ThreadDetails))):
-			print(Extract(ToolDetails, ThreadDetails)[times]) # Print is handling Line feed right now so patch that
+		Print = False
+		if Print:
+			for times in range(len(Extract(ToolDetails, ThreadDetails))):
+				print(Extract(ToolDetails, ThreadDetails)[times]) # Print is handling Line feed right now so patch that
 
 		ScriptName = "(THREAD)\r\n" # Max of 7 chars
 		WriteFile.write(ScriptName) # TODO: File name handling needs to be integrated into extract
